@@ -843,7 +843,6 @@ export default function GameSession({ onExit, totalRounds = 5, playlistId, onRou
   }, [debugMode]);
 
   const handleNextRound = () => {
-    console.log(`[GameSession] handleNextRound called: currentRound=${currentRound}, totalRounds=${totalRounds}, gameState=${gameState}`);
     // Track that user clicked continue on results screen
     const lastRoundScore = roundScores[roundScores.length - 1];
     if (lastRoundScore) {
@@ -858,7 +857,6 @@ export default function GameSession({ onExit, totalRounds = 5, playlistId, onRou
     }
 
     if (currentRound >= totalRounds) {
-      console.log(`[GameSession] Setting gameState to complete`);
       setGameState('complete');
     } else {
       const nextRound = currentRound + 1;
@@ -1095,7 +1093,6 @@ export default function GameSession({ onExit, totalRounds = 5, playlistId, onRou
 
   // Results screen
   if (gameState === 'results') {
-    console.log(`[GameSession] Rendering RoundResults screen, currentRound=${currentRound}, totalRounds=${totalRounds}`);
     if (roundScores.length === 0) {
       handleNextRound();
       return null;
@@ -1135,7 +1132,6 @@ export default function GameSession({ onExit, totalRounds = 5, playlistId, onRou
 
   // Complete screen
   if (gameState === 'complete') {
-    console.log(`[GameSession] Rendering complete screen, roundScores.length=${roundScores.length}, showLeaderboard=${showLeaderboard}`);
     if (roundScores.length === 0) {
       onExit();
       return null;
@@ -1156,7 +1152,6 @@ export default function GameSession({ onExit, totalRounds = 5, playlistId, onRou
     }));
 
     const handleShowLeaderboard = () => {
-      console.log('[GameSession] handleShowLeaderboard called');
       if (playlistId) {
         anonymousSessionManager.advanceToNextPlaylist();
       }
@@ -1164,7 +1159,6 @@ export default function GameSession({ onExit, totalRounds = 5, playlistId, onRou
     };
 
     const handleLeaderboardContinue = () => {
-      console.log('[GameSession] handleLeaderboardContinue called, calling onExit');
       setShowLeaderboard(false);
       onExit();
     };

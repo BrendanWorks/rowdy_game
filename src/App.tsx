@@ -442,7 +442,6 @@ export default function App() {
         <GameSession
           playlistId={selectedPlaylistId}
           onExit={() => {
-            handleLevelComplete();
             setSelectedPlaylistId(null);
             if (session) {
               trackPageView('/menu');
