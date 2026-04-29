@@ -1,0 +1,1291 @@
+/**
+ * GameSession.tsx - NEON EDITION
+ */
+
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import {
+  Trophy, Star, Search, Camera, Triangle, Users, Check,
+  ArrowUpDown, Shuffle, CircleX, Layers, BookOpen,
+  Gamepad2, Zap, ThumbsUp
+} from 'lucide-react';
+import { supabase } from '../lib/supabase';
+import {
+  createGameSession,
+  completeGameSession,
+  saveAllRoundResults,
+  insertLeaderboardEntry,
+  getGameId
+} from '../lib/supabaseHelpers';
+import { addToQueue } from '../utils/submissionQueue';
+import { anonymousSessionManager } from '../lib/anonymousSession';
+import GameWrapper from './GameWrapper';
+import RoundResults from './RoundResults';
+import CelebrationScreen from './CelebrationScreen';
+
+const OddManOut = React.lazy(() => import('./OddManOut'));
+const PhotoMystery = React.lazy(() => import('./PhotoMystery.jsx'));
+const RankAndRoll = React.lazy(() => import('./RankAndRoll'));
+const SnapShot = React.lazy(() => import('./SnapShot'));
+const SplitDecision = React.lazy(() => import('./SplitDecision'));
+const Snake = React.lazy(() => import('./Snake'));
+const FakeOut = React.lazy(() => import('./FakeOut'));
+const HiveMind = React.lazy(() => import('./HiveMind'));
+const Superlative = React.lazy(() => import('./Superlative'));
+const TrueFalse = React.lazy(() => import('./TrueFalse'));
+const MultipleChoice = React.lazy(() => import('./MultipleChoice'));
+const Tracer = React.lazy(() => import('./Tracer'));
+const Clutch = React.lazy(() => import('./Clutch'));
+const Flashbang = React.lazy(() => import('./Flashbang'));
+const ColorClash = React.lazy(() => import('./ColorClash'));
+const Recall = React.lazy(() => import('./Recall'));
+const Slot = React.lazy(() => import('./Slot'));
+const Pivot = React.lazy(() => import('./Pivot'));
+const Debris = React.lazy(() => import('./Debris'));
+import AuthModal from './AuthModal';
+import ErrorBoundary from './ErrorBoundary';
+import LeaderboardPostRound from './LeaderboardPostRound';
+import GameplayHeader from './GameplayHeader';
+import { scoringSystem, calculateSessionScore, getSessionGrade, GameScore, applyTimeBonus, applyPerfectScoreBonus } from '../lib/scoringSystem';
+import { analytics } from '../lib/analytics';
+import { logClientError } from '../lib/errorLogger';
+import { audioManager } from '../lib/audioManager';
+import { getSavedSfxLevel, applySfxLevel } from './SfxVolumeControl';
+import ReactGA from 'react-ga4';
+
+const SPLIT_DECISION_POINTS_PER_ITEM = Math.round(1000 / 7);
+
+interface GameConfig {
+  id: string;
+  name: string;
+  component: React.ComponentType<any>;
+  duration: number;
+  instructions: string;
+  dbId?: number;
+}
+
+const GAME_REGISTRY: GameConfig[] = [
+  { id: 'odd-man-out',     dbId: 3,  name: 'Odd Man Out',      component: OddManOut,       duration: 60,  instructions: "Select the 2 items that don't belong" },
+  { id: 'photo-mystery',   dbId: 4,  name: 'Zooma',            component: PhotoMystery,    duration: 45,  instructions: 'Identify the photo as it zooms out' },
+  { id: 'rank-and-roll',   dbId: 5,  name: 'Ranky',            component: RankAndRoll,     duration: 90,  instructions: 'Arrange items in the correct order' },
+  { id: 'snapshot',        dbId: 6,  name: 'SnapShot',         component: SnapShot,        duration: 30,  instructions: 'Drag 4 pieces to complete the puzzle' },
+  { id: 'split-decision',  dbId: 7,  name: 'Split Decision',   component: SplitDecision,   duration: 60,  instructions: 'Categorize items: A, B, or BOTH' },
+  { id: 'snake',           dbId: 12, name: 'Snake',            component: Snake,           duration: 75,  instructions: 'Eat food, avoid walls and yourself' },
+  { id: 'fake-out',        dbId: 15, name: 'Fake Out',         component: FakeOut,         duration: 60,  instructions: 'Identify if the photo is real or AI-generated' },
+  { id: 'hive-mind',       dbId: 13, name: 'Hive Mind',        component: HiveMind,        duration: 60,  instructions: 'Guess what most people chose in each survey' },
+  { id: 'superlative',     dbId: 19, name: 'Superlative',      component: Superlative,     duration: 60,  instructions: 'Pick which item is bigger, heavier, longer, or older!' },
+  { id: 'true-false',      dbId: 20, name: 'True or False',    component: TrueFalse,       duration: 90,  instructions: 'Decide if each statement is True or False!' },
+  { id: 'multiple-choice', dbId: 21, name: 'Multiple Choice',  component: MultipleChoice,  duration: 90,  instructions: 'Pick the correct answer from three options!' },
+  { id: 'tracer',          dbId: 22, name: 'Tracer',           component: Tracer,          duration: 120, instructions: 'Memorize the shape, then trace it from memory!' },
+  { id: 'clutch',          dbId: 23, name: 'Clutch',           component: Clutch,          duration: 60,  instructions: 'Tap when the ring hits the sweet spot!' },
+  { id: 'flashbang',       dbId: 24, name: 'Flashbang',        component: Flashbang,       duration: 45,  instructions: 'Memorize the lit tiles, then tap them from memory!' },
+  { id: 'color-clash',     dbId: 17, name: 'ColorClash',       component: ColorClash,      duration: 30,  instructions: 'Tap the button matching the ink color, not the word!' },
+  { id: 'recall',          dbId: 18, name: 'Recall',           component: Recall,          duration: 90,  instructions: 'Remember items and answer questions about what you saw' },
+  { id: 'slot',            dbId: 25, name: 'Slot',             component: Slot,            duration: 90,  instructions: 'Tap the correct letters to fill in the blanks!' },
+  { id: 'pivot',           dbId: 26, name: 'Pivot',            component: Pivot,           duration: 60,  instructions: 'Find the word that connects two phrases' },
+  { id: 'debris',          dbId: 27, name: 'Debris',           component: Debris,          duration: 600000, instructions: 'Rotate, thrust, and shoot to destroy the rocks!' },
+];
+
+const AVAILABLE_GAMES = GAME_REGISTRY;
+
+const GAME_ICONS: { [key: string]: JSX.Element } = {
+  'odd-man-out': <CircleX className="w-full h-full" />,
+  'photo-mystery': <Search className="w-full h-full" />,
+  'rank-and-roll': <ArrowUpDown className="w-full h-full" />,
+  'snapshot': <Camera className="w-full h-full" />,
+  'split-decision': <Layers className="w-full h-full" />,
+  'snake': <Gamepad2 className="w-full h-full" />,
+  'fake-out': <CircleX className="w-full h-full" />,
+  'hive-mind': <Users className="w-full h-full" />,
+  'superlative': <ThumbsUp className="w-full h-full" />,
+  'true-false': <Shuffle className="w-full h-full" />,
+  'multiple-choice': <Check className="w-full h-full" />,
+  'tracer': <Zap className="w-full h-full" />,
+  'clutch': <Gamepad2 className="w-full h-full" />,
+  'flashbang': <Zap className="w-full h-full" />,
+  'color-clash': <CircleX className="w-full h-full" />,
+  'recall': <Search className="w-full h-full" />,
+  'slot': <BookOpen className="w-full h-full" />,
+  'pivot': <BookOpen className="w-full h-full" />,
+  'debris': <Zap className="w-full h-full" />,
+};
+
+const GAME_ID_TO_SLUG: { [key: number]: string } = Object.fromEntries(
+  GAME_REGISTRY.filter(g => g.dbId !== undefined).map(g => [g.dbId!, g.id])
+);
+
+const SLUG_ALIASES: { [key: string]: string } = {
+  'balls': 'zen-gravity',
+  'bounce': 'up-yours',
+  'kingsnake': 'snake',
+  'ranky': 'rank-and-roll',
+};
+
+type PlaylistRoundMetadata =
+  | { type: 'procedural'; game_slug: string }
+  | { type: 'multi-puzzle'; puzzle_ids: number[] }
+  | { superlative_puzzle_ids: number[] }
+  | Record<string, never>;
+
+interface PlaylistRound {
+  round_number: number;
+  game_id: number | null;
+  puzzle_id: number | null;
+  ranking_puzzle_id: number | null;
+  superlative_puzzle_id: number | null;
+  metadata: PlaylistRoundMetadata;
+  game_name: string;
+}
+
+interface RoundData {
+  gameId: string;
+  gameName: string;
+  rawScore: number;
+  maxScore: number;
+  normalizedScore: GameScore;
+}
+
+interface GameSessionProps {
+  onExit: () => void;
+  totalRounds?: number;
+  playlistId?: number;
+  onRoundComplete?: () => void;
+  debugMode?: boolean;
+}
+
+export default function GameSession({ onExit, totalRounds = 5, playlistId, onRoundComplete, debugMode = false }: GameSessionProps) {
+  const [user, setUser] = useState<any>(null);
+  const [currentRound, setCurrentRound] = useState(1);
+  const [gameState, setGameState] = useState<'intro' | 'playing' | 'results' | 'complete'>('intro');
+  const [currentGame, setCurrentGame] = useState<GameConfig | null>(null);
+  const [roundScores, setRoundScores] = useState<RoundData[]>([]);
+  const [playedGames, setPlayedGames] = useState<string[]>([]);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionSaved, setSessionSaved] = useState(false);
+  const sessionStartTimeRef = useRef<number | null>(null);
+  const [currentGameScore, setCurrentGameScore] = useState<{ score: number; maxScore: number }>({ score: 0, maxScore: 0 });
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [pendingSessionData, setPendingSessionData] = useState<any>(null);
+  // Start loading true if playlist is provided to prevent race condition
+  const [playlistLoading, setPlaylistLoading] = useState(!!playlistId);
+  const [playlistRounds, setPlaylistRounds] = useState<PlaylistRound[]>([]);
+  const [playlistName, setPlaylistName] = useState<string>('');
+  const [currentGameSlug, setCurrentGameSlug] = useState<string | null>(null);
+  const [currentPuzzleId, setCurrentPuzzleId] = useState<number | null>(null);
+  const [currentPuzzleIds, setCurrentPuzzleIds] = useState<number[] | null>(null);
+  const [prefetchedPuzzles, setPrefetchedPuzzles] = useState<any[] | null>(null);
+  const [currentRankingPuzzleId, setCurrentRankingPuzzleId] = useState<number | null>(null);
+  const [currentSuperlativePuzzleId, setCurrentSuperlativePuzzleId] = useState<number | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [soundEnabled, setSoundEnabled] = useState(() => getSavedSfxLevel() !== 'off');
+  const [showLevelIntro, setShowLevelIntro] = useState(false);
+  const [levelNumber, setLevelNumber] = useState<number | null>(null);
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const [introExiting] = useState(false);
+
+  const debugSkipRef = useRef<{ gameState: string; skip: () => void } | null>(null);
+
+  const currentSessionScore = useMemo(
+    () => roundScores.reduce((sum, r) => sum + (r.normalizedScore.totalWithBonus || r.normalizedScore.normalizedScore), 0),
+    [roundScores]
+  );
+
+  const loadRound = useCallback(async (roundNumber: number, rounds: PlaylistRound[]) => {
+    setPlaylistLoading(true);
+    try {
+      const round = rounds.find(r => r.round_number === roundNumber);
+      if (!round) {
+        return;
+      }
+
+      let gameSlug: string | null = null;
+
+      if (round.game_id) {
+        gameSlug = GAME_ID_TO_SLUG[round.game_id];
+      } else if ('game_slug' in round.metadata) {
+        gameSlug = round.metadata.game_slug;
+      }
+
+      if (!gameSlug) {
+        return;
+      }
+
+      gameSlug = SLUG_ALIASES[gameSlug] ?? gameSlug;
+      setCurrentGameSlug(gameSlug);
+
+      if ('superlative_puzzle_ids' in round.metadata) {
+        const ids = (round.metadata as { superlative_puzzle_ids: number[] }).superlative_puzzle_ids;
+        setCurrentPuzzleIds(ids);
+        setCurrentPuzzleId(null);
+        setPrefetchedPuzzles(null);
+      } else if ('puzzle_ids' in round.metadata) {
+        const ids = (round.metadata as { puzzle_ids: number[] }).puzzle_ids;
+        setCurrentPuzzleIds(ids);
+        setCurrentPuzzleId(null);
+
+        if (gameSlug === 'fake-out') {
+          try {
+            const { data } = await supabase
+              .from('puzzles')
+              .select('id, image_url, correct_answer, prompt, metadata')
+              .in('id', ids);
+            setPrefetchedPuzzles(data && data.length > 0 ? data : null);
+          } catch {
+            setPrefetchedPuzzles(null);
+          }
+        } else {
+          setPrefetchedPuzzles(null);
+        }
+      } else {
+        setCurrentPuzzleId(round.puzzle_id);
+        setCurrentPuzzleIds(null);
+        setPrefetchedPuzzles(null);
+      }
+
+      setCurrentRankingPuzzleId(round.ranking_puzzle_id);
+      setCurrentSuperlativePuzzleId(round.superlative_puzzle_id ?? null);
+    } catch {
+    } finally {
+      setPlaylistLoading(false);
+    }
+  }, []);
+
+  const loadPlaylist = useCallback(async () => {
+    if (!playlistId) {
+      setPlaylistLoading(false);
+      return;
+    }
+
+    setPlaylistLoading(true);
+
+    try {
+      const { data: playlist, error: playlistError } = await supabase
+        .from('playlists')
+        .select('id, name, description, sequence_order')
+        .eq('id', playlistId)
+        .maybeSingle();
+
+      if (playlistError) {
+        throw playlistError;
+      }
+
+      if (!playlist) {
+        setLoadError('Playlist not found. Returning to menu...');
+        setPlaylistLoading(false);
+        setTimeout(onExit, 2000);
+        return;
+      }
+
+      setPlaylistName(playlist.name);
+      setLevelNumber(playlist.sequence_order);
+
+      const { data: rounds, error: roundsError } = await supabase
+        .from('playlist_rounds')
+        .select('round_number, game_id, puzzle_id, ranking_puzzle_id, superlative_puzzle_id, metadata')
+        .eq('playlist_id', playlistId)
+        .order('round_number');
+
+      if (roundsError) {
+        throw roundsError;
+      }
+
+      if (!rounds || rounds.length === 0) {
+        setLoadError('No rounds configured for this playlist. Returning to menu...');
+        setPlaylistLoading(false);
+        setTimeout(onExit, 2000);
+        return;
+      }
+
+      const gameIds = rounds
+        .map(r => r.game_id)
+        .filter((id): id is number => id !== null);
+
+      const games = gameIds.length > 0
+        ? (await supabase.from('games').select('id, name').in('id', gameIds)).data
+        : [];
+
+      const transformedRounds: PlaylistRound[] = rounds.map(r => ({
+        round_number: r.round_number,
+        game_id: r.game_id,
+        puzzle_id: r.puzzle_id,
+        ranking_puzzle_id: r.ranking_puzzle_id,
+        superlative_puzzle_id: r.superlative_puzzle_id ?? null,
+        metadata: (r.metadata || {}) as PlaylistRoundMetadata,
+        game_name: games?.find(g => g.id === r.game_id)?.name || 'Procedural Game'
+      }));
+
+      setPlaylistRounds(transformedRounds);
+
+      loadRound(1, transformedRounds);
+      setShowLevelIntro(true);
+      setGameState('intro');
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String((error as any)?.message ?? error));
+      logClientError(err, { source: 'loadPlaylist', playlist_id: playlistId });
+      setLoadError('Could not load playlist. Returning to menu...');
+      setPlaylistLoading(false);
+      setTimeout(onExit, 2000);
+    }
+  }, [playlistId, onExit, loadRound]);
+
+  // Unlock audio on first user gesture
+  useEffect(() => {
+    let unlocked = false;
+
+    const unlock = async () => {
+      if (!unlocked) {
+        unlocked = true;
+        await audioManager.unlockAudio();
+      }
+    };
+
+    const handleGesture = () => {
+      unlock();
+    };
+
+    document.addEventListener('touchend', handleGesture, { once: true });
+    document.addEventListener('click', handleGesture, { once: true });
+    document.addEventListener('pointerup', handleGesture, { once: true });
+
+    return () => {
+      document.removeEventListener('touchend', handleGesture);
+      document.removeEventListener('click', handleGesture);
+      document.removeEventListener('pointerup', handleGesture);
+    };
+  }, []);
+
+  // Load playlist if playlistId is provided
+  useEffect(() => {
+    if (playlistId) {
+      loadPlaylist();
+    } else {
+      setPlaylistLoading(false);
+    }
+  }, [playlistId, loadPlaylist]);
+
+  // Watchdog: if playlistLoading is stuck for >8s, force it false so the game can proceed
+  useEffect(() => {
+    if (!playlistLoading) return;
+    const watchdog = setTimeout(() => {
+      setPlaylistLoading(false);
+    }, 8000);
+    return () => clearTimeout(watchdog);
+  }, [playlistLoading]);
+
+  // Get current user on mount
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      const newUser = session?.user;
+      setUser(newUser);
+
+      if (newUser && pendingSessionData && !sessionSaved) {
+        try {
+          const { success, data } = await createGameSession(newUser.id);
+          if (success && data) {
+            const newSessionId = data.id;
+
+            const completeResult = await completeGameSession(
+              newSessionId,
+              pendingSessionData.session.totalScore,
+              pendingSessionData.session.maxPossible,
+              pendingSessionData.session.percentage,
+              pendingSessionData.grade,
+              pendingSessionData.results.length,
+              pendingSessionData.playtimeSeconds
+            );
+
+            await saveAllRoundResults(newSessionId, newUser.id, pendingSessionData.results);
+
+            setSessionId(newSessionId);
+            setSessionSaved(true);
+            setPendingSessionData(null);
+            setShowAuthModal(false);
+          }
+        } catch (error) {
+          logClientError(error, { source: 'savePendingSession' });
+        }
+      }
+    });
+
+    return () => subscription?.unsubscribe();
+  }, [pendingSessionData, sessionSaved]);
+
+  // Create game session when starting
+  useEffect(() => {
+    if (user?.id && gameState === 'intro' && currentRound === 1 && !sessionId) {
+      const initSession = async () => {
+        try {
+          const { success, data } = await createGameSession(user.id);
+          if (success && data) {
+            setSessionId(data.id);
+            sessionStartTimeRef.current = Date.now();
+          }
+        } catch {
+        }
+      };
+
+      initSession();
+    }
+  }, [user?.id, gameState, currentRound, sessionId]);
+
+  // Start 7-second timer when game completes
+  useEffect(() => {
+    if (gameState === 'complete') {
+      const timer = setTimeout(() => {
+        if (!user?.id && !sessionSaved && pendingSessionData) {
+          setShowAuthModal(true);
+        }
+      }, 7000);
+      return () => clearTimeout(timer);
+    }
+  }, [gameState]);
+
+  // Save complete session when finished
+  useEffect(() => {
+    if (gameState === 'complete' && !sessionSaved) {
+      let cancelled = false;
+
+      const gameScores = roundScores.map(r => r.normalizedScore);
+      const session = calculateSessionScore(gameScores);
+      const grade = getSessionGrade(session.percentage);
+      const playtimeSeconds = sessionStartTimeRef.current
+        ? Math.round((Date.now() - sessionStartTimeRef.current) / 1000)
+        : 0;
+
+      const sessionData = {
+        gameScores,
+        session,
+        grade,
+        playtimeSeconds,
+        results: roundScores.map((r, idx) => ({
+          gameId: getGameId(r.gameId),
+          puzzleId: 0,
+          roundNumber: idx + 1,
+          rawScore: r.rawScore,
+          maxScore: r.maxScore,
+          normalizedScore: Math.round(r.normalizedScore.normalizedScore),
+          grade: r.normalizedScore.grade
+        }))
+      };
+
+      const isPerfectGame = session.percentage === 100;
+
+      analytics.gameCompleted(
+        'Game Session',
+        Math.round(session.totalScore),
+        isPerfectGame,
+        playtimeSeconds
+      );
+
+      analytics.sessionDuration(
+        'Game Session',
+        playtimeSeconds,
+        roundScores.length,
+        roundScores.length
+      );
+
+      if (!user?.id) {
+        if (!cancelled) {
+          setPendingSessionData(sessionData);
+
+          if (playlistId) {
+            anonymousSessionManager.update({
+              currentPlaylistId: playlistId,
+              completedRounds: roundScores.length,
+              roundScores: sessionData.results.map(r => ({
+                gameId: r.gameId.toString(),
+                gameName: roundScores.find(rs => getGameId(rs.gameId) === r.gameId)?.gameName || '',
+                rawScore: r.rawScore,
+                maxScore: r.maxScore,
+                normalizedScore: r.normalizedScore,
+                grade: r.grade
+              }))
+            });
+          }
+        }
+      } else if (sessionId) {
+        const saveToSupabase = async () => {
+          const isOnline = navigator.onLine;
+
+          const queueFallback = async (displayName: string) => {
+            addToQueue({
+              sessionId,
+              userId: user.id,
+              playlistId: playlistId ?? null,
+              session: {
+                totalScore: sessionData.session.totalScore,
+                maxPossible: sessionData.session.maxPossible,
+                percentage: sessionData.session.percentage,
+                grade: sessionData.grade,
+                playtimeSeconds: sessionData.playtimeSeconds,
+              },
+              results: sessionData.results,
+              roundCount: roundScores.length,
+              displayName,
+            });
+          };
+
+          try {
+            if (!isOnline) {
+              await queueFallback(user.email?.split('@')[0] || 'Anonymous');
+              if (!cancelled) setSessionSaved(true);
+              return;
+            }
+
+            await completeGameSession(
+              sessionId,
+              sessionData.session.totalScore,
+              sessionData.session.maxPossible,
+              sessionData.session.percentage,
+              sessionData.grade,
+              roundScores.length,
+              sessionData.playtimeSeconds
+            );
+
+            await saveAllRoundResults(sessionId, user.id, sessionData.results);
+
+            const { data: profile } = await supabase
+              .from('user_profiles')
+              .select('email')
+              .eq('id', user.id)
+              .maybeSingle();
+
+            const displayName = user.email?.split('@')[0]
+              || profile?.email?.split('@')[0]
+              || 'Anonymous';
+
+            await insertLeaderboardEntry({
+              userId: user.id,
+              score: Math.round(sessionData.session.totalScore),
+              displayName,
+              playlistId: playlistId ?? null,
+              roundCount: roundScores.length,
+            });
+
+            if (!cancelled) {
+              setSessionSaved(true);
+            }
+          } catch (error) {
+            if (!cancelled) {
+              logClientError(error, { source: 'saveSession', session_id: sessionId });
+              try {
+                await queueFallback(user.email?.split('@')[0] || 'Anonymous');
+                setSessionSaved(true);
+              } catch {
+                // silent - best effort
+              }
+            }
+          }
+        };
+
+        saveToSupabase();
+      }
+
+      return () => {
+        cancelled = true;
+      };
+    }
+  }, [gameState, user?.id, sessionId, roundScores, sessionSaved, playlistId]);
+
+  const selectRandomGame = useCallback(() => {
+    if (playlistId && currentGameSlug) {
+      const nextGame = AVAILABLE_GAMES.find(g => g.id === currentGameSlug);
+      if (nextGame) {
+        setCurrentGame(nextGame);
+        setPlayedGames(prev => [...prev, nextGame.id]);
+        return;
+      }
+    }
+
+    const availableGames = AVAILABLE_GAMES.filter(
+      game => !playedGames.includes(game.id)
+    );
+
+    const gamesToChooseFrom = availableGames.length > 0 ? availableGames : AVAILABLE_GAMES;
+    const randomGame = gamesToChooseFrom[Math.floor(Math.random() * gamesToChooseFrom.length)];
+
+    setCurrentGame(randomGame);
+    setPlayedGames(prev => [...prev, randomGame.id]);
+  }, [playlistId, currentGameSlug, playedGames]);
+
+  const startRound = () => {
+    setCurrentGameScore({ score: 0, maxScore: 0 });
+    setGameState('playing');
+    if (currentGame) {
+      analytics.gameStarted(currentGame.name, getGameId(currentGame.id));
+    }
+  };
+
+  const handleScoreUpdate = useCallback((score: number, maxScore: number) => {
+    setCurrentGameScore({ score, maxScore });
+  }, []);
+
+  const handleGameComplete = (rawScore: number, maxScore: number, timeRemaining: number = 0) => {
+    try {
+    if (!currentGame) {
+      handleNextRound();
+      return;
+    }
+
+    if (maxScore === 0 || !isFinite(maxScore)) {
+      maxScore = 100;
+      rawScore = 0;
+    }
+
+    let normalizedScore: GameScore;
+    const percentage = (rawScore / maxScore) * 100;
+
+    switch (currentGame.id) {
+      case 'odd-man-out':
+        normalizedScore = scoringSystem.oddManOut(rawScore, maxScore);
+        break;
+
+      case 'rank-and-roll':
+        normalizedScore = scoringSystem.rankAndRoll(rawScore, maxScore);
+        break;
+
+      case 'shape-sequence':
+        normalizedScore = scoringSystem.shapeSequence(rawScore);
+        break;
+
+      case 'split-decision':
+        // Use correctCount if available (from getGameScore), otherwise calculate from points
+        const splitCorrectCount = (currentGameScore as any)?.correctCount ?? Math.round(rawScore / SPLIT_DECISION_POINTS_PER_ITEM);
+        const splitTotalItems = (currentGameScore as any)?.totalItems ?? 7;
+        const splitWrongCount = splitTotalItems - splitCorrectCount;
+        normalizedScore = scoringSystem.splitDecision(splitCorrectCount, splitWrongCount);
+        break;
+
+      case 'word-rescue':
+        normalizedScore = scoringSystem.pop(rawScore);
+        break;
+
+      case 'photo-mystery':
+        normalizedScore = scoringSystem.zooma(rawScore, maxScore);
+        break;
+
+      case 'snapshot':
+        const completed = rawScore >= 50;
+        normalizedScore = scoringSystem.snapshot(completed, timeRemaining, currentGame.duration);
+        break;
+
+      case 'snake':
+        normalizedScore = scoringSystem.snake(rawScore);
+        break;
+
+      case 'gravity-ball':
+        normalizedScore = scoringSystem.gravityBall(rawScore);
+        break;
+
+      case 'neural-pulse':
+        normalizedScore = scoringSystem.neuralPulse(rawScore);
+        break;
+
+      case 'zen-gravity':
+        normalizedScore = scoringSystem.oddManOut(rawScore, maxScore);
+        break;
+
+      case 'superlative':
+        normalizedScore = scoringSystem.superlative(rawScore, maxScore);
+        break;
+
+      case 'true-false':
+        normalizedScore = scoringSystem.superlative(rawScore, maxScore);
+        break;
+
+      case 'color-clash':
+        normalizedScore = scoringSystem.colorClash(rawScore, maxScore);
+        break;
+
+      case 'recall':
+        normalizedScore = scoringSystem.recall(rawScore, maxScore);
+        break;
+
+      case 'slot':
+        normalizedScore = scoringSystem.superlative(rawScore, maxScore);
+        break;
+
+      case 'pivot':
+        normalizedScore = scoringSystem.superlative(rawScore, maxScore);
+        break;
+
+      case 'debris':
+        normalizedScore = scoringSystem.debris(rawScore);
+        break;
+
+      case 'fake-out':
+        normalizedScore = scoringSystem.superlative(rawScore, maxScore);
+        break;
+
+      case 'double-fake':
+        normalizedScore = scoringSystem.superlative(rawScore, maxScore);
+        break;
+
+      case 'hive-mind':
+        normalizedScore = scoringSystem.superlative(rawScore, maxScore);
+        break;
+
+      case 'multiple-choice':
+        normalizedScore = scoringSystem.superlative(rawScore, maxScore);
+        break;
+
+      case 'tracer':
+        normalizedScore = scoringSystem.superlative(rawScore, maxScore);
+        break;
+
+      case 'clutch':
+        normalizedScore = scoringSystem.superlative(rawScore, maxScore);
+        break;
+
+      case 'flashbang':
+        normalizedScore = scoringSystem.superlative(rawScore, maxScore);
+        break;
+
+      default:
+        normalizedScore = {
+          gameId: '',
+          gameName: '',
+          rawScore: 0,
+          normalizedScore: 0,
+          grade: 'D',
+          breakdown: ''
+        };
+    }
+
+    // Apply perfect score bonus FIRST (before time bonus) for content puzzles with 100% accuracy
+    normalizedScore = applyPerfectScoreBonus(normalizedScore);
+
+    // Apply time bonus if there's time remaining (but NOT for Snake, Gravity Ball, or Word Surge)
+    if (timeRemaining > 0 && currentGame.duration > 0 && currentGame.id !== 'snake' && currentGame.id !== 'gravity-ball' && currentGame.id !== 'word-rescue' && currentGame.id !== 'debris') {
+      normalizedScore = applyTimeBonus(normalizedScore, timeRemaining, currentGame.duration);
+    }
+
+    setRoundScores(prev => [...prev, {
+      gameId: currentGame.id,
+      gameName: currentGame.name,
+      rawScore,
+      maxScore,
+      normalizedScore
+    }]);
+
+    const finalScore = normalizedScore.totalWithBonus || normalizedScore.normalizedScore;
+    const isPerfect = normalizedScore.grade === 'A';
+    const isSuccess = normalizedScore.grade !== 'D' && normalizedScore.grade !== 'F';
+
+    analytics.puzzleCompleted(
+      currentGame.name,
+      currentRound,
+      1,
+      Math.round(finalScore),
+      timeRemaining,
+      isPerfect
+    );
+
+    analytics.roundScore(
+      currentGame.name,
+      currentRound,
+      Math.round(finalScore),
+      100,
+      1
+    );
+
+    analytics.roundSuccess(
+      currentGame.name,
+      currentRound,
+      isSuccess,
+      Math.round(finalScore),
+      currentGame.duration - timeRemaining
+    );
+
+    // Track round completion with detailed info
+    const timeSpent = currentGame.duration - timeRemaining;
+    analytics.roundCompleted(
+      currentGame.name,
+      currentRound,
+      Math.round(finalScore),
+      isPerfect,
+      timeSpent
+    );
+
+    setGameState('results');
+    onRoundComplete?.();
+    } catch (err) {
+      logClientError(err, {
+        source: 'handleGameComplete',
+        game_id: currentGame?.id,
+        rawScore,
+        maxScore,
+        timeRemaining,
+      });
+      setGameState('results');
+    }
+  };
+
+  debugSkipRef.current = debugMode ? { gameState, skip: () => handleGameComplete(0, 100) } : null;
+
+  useEffect(() => {
+    if (!debugMode) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Escape' && debugSkipRef.current?.gameState === 'playing') {
+        e.preventDefault();
+        debugSkipRef.current.skip();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [debugMode]);
+
+  const handleNextRound = () => {
+    console.log(`[GameSession] handleNextRound called: currentRound=${currentRound}, totalRounds=${totalRounds}, gameState=${gameState}`);
+    // Track that user clicked continue on results screen
+    const lastRoundScore = roundScores[roundScores.length - 1];
+    if (lastRoundScore) {
+      ReactGA.event({
+        category: 'Game',
+        action: 'results_continued',
+        label: `${lastRoundScore.gameName} - Round ${currentRound}`,
+        game_name: lastRoundScore.gameName,
+        round_number: currentRound,
+        score: Math.round(lastRoundScore.normalizedScore.totalWithBonus || lastRoundScore.normalizedScore.normalizedScore),
+      });
+    }
+
+    if (currentRound >= totalRounds) {
+      console.log(`[GameSession] Setting gameState to complete`);
+      setGameState('complete');
+    } else {
+      const nextRound = currentRound + 1;
+      setCurrentRound(nextRound);
+      setCurrentGame(null);
+      setCurrentGameSlug(null);
+      setCurrentGameScore({ score: 0, maxScore: 0 });
+
+      if (playlistId && playlistRounds.length > 0) {
+        loadRound(nextRound, playlistRounds);
+        setGameState('intro');
+      } else {
+        setGameState('playing');
+      }
+    }
+  };
+
+  const handleSkipGame = () => {
+    if (currentGame) {
+      ReactGA.event({
+        category: 'Game',
+        action: 'game_skipped',
+        label: `${currentGame.name} - Round ${currentRound}`,
+        game_name: currentGame.name,
+        round_number: currentRound,
+        user_id: user?.id,
+      });
+
+      handleGameComplete(0, 100);
+    }
+  };
+
+  const handleQuitAndSave = async () => {
+    const completedRounds = roundScores.length;
+    const playtimeSeconds = sessionStartTimeRef.current
+      ? Math.round((Date.now() - sessionStartTimeRef.current) / 1000)
+      : 0;
+
+    analytics.gameAbandoned(
+      currentGame?.name || 'Unknown',
+      currentRound,
+      1,
+      Math.round(currentSessionScore),
+      playtimeSeconds
+    );
+
+    // Additional tracking for quit with user info
+    ReactGA.event({
+      category: 'Game',
+      action: 'quit_and_save',
+      label: `${currentGame?.name || 'Unknown'} - Round ${currentRound}`,
+      game_name: currentGame?.name,
+      round_number: currentRound,
+      completed_rounds: completedRounds,
+      session_score: Math.round(currentSessionScore),
+      playtime_seconds: playtimeSeconds,
+      user_id: user?.id,
+    });
+
+    if (user?.id && sessionId) {
+      try {
+        const avgScore = completedRounds > 0 ? currentSessionScore / completedRounds : 0;
+        const percentage = avgScore;
+        const grade = getSessionGrade(percentage);
+
+        await completeGameSession(
+          sessionId,
+          Math.round(currentSessionScore),
+          completedRounds * 100,
+          percentage,
+          grade,
+          completedRounds,
+          playtimeSeconds
+        );
+
+        const results = roundScores.map((r, idx) => ({
+          gameId: getGameId(r.gameId),
+          puzzleId: 0,
+          roundNumber: idx + 1,
+          rawScore: r.rawScore,
+          maxScore: r.maxScore,
+          normalizedScore: Math.round(r.normalizedScore.normalizedScore),
+          grade: r.normalizedScore.grade
+        }));
+
+        await saveAllRoundResults(sessionId, user.id, results);
+      } catch {
+      }
+    }
+
+    onExit();
+  };
+
+  // Select game when entering intro screen for any round
+  // CRITICAL: Don't select game while playlist is loading to avoid race condition
+  // currentGameSlug must be in deps so the effect re-runs once loadRound populates it
+  useEffect(() => {
+    if (gameState === 'intro' && !currentGame && !playlistLoading) {
+      selectRandomGame();
+    }
+  }, [gameState, currentRound, currentGame, playlistLoading, currentGameSlug, selectRandomGame]);
+
+  // Fallback: Select game when entering playing state without a game (shouldn't happen with playlist)
+  useEffect(() => {
+    if (gameState === 'playing' && !currentGame && !playlistLoading) {
+      selectRandomGame();
+    }
+  }, [gameState, currentGame, playlistLoading, selectRandomGame]);
+
+  // Auto-advance from level intro after 4 seconds
+  useEffect(() => {
+    if (showLevelIntro && currentRound === 1 && gameState === 'intro') {
+      const timer = setTimeout(() => {
+        setShowLevelIntro(false);
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [showLevelIntro, currentRound, gameState, playlistName]);
+
+  // Auto-advance from intro to playing after 4 seconds (works for all rounds in intro)
+  useEffect(() => {
+    if (gameState === 'intro' && currentGame && !showLevelIntro) {
+      const timer = setTimeout(() => startRound(), 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [gameState, currentGame, showLevelIntro]);
+
+  // Intro screen (shows before each round in playlist mode)
+  if (gameState === 'intro') {
+
+    // Wait for game to be selected or playlist to load
+    if (!currentGame || playlistLoading || loadError) {
+      return (
+        <div className={`w-screen bg-black flex items-center justify-center${introExiting ? ' animate-intro-exit' : ''}`} style={{ minHeight: '100dvh' }}>
+          <div className="text-center">
+            <Star className="w-16 h-16 text-cyan-400 animate-pulse mx-auto mb-4" style={{ filter: 'drop-shadow(0 0 20px #00ffff)' }} />
+            {loadError
+              ? <p className="text-red-400 text-sm max-w-xs mx-auto">{loadError}</p>
+              : playlistLoading
+                ? <p className="text-cyan-300 text-sm">Loading playlist...</p>
+                : <p className="text-cyan-300 text-sm">Loading round...</p>
+            }
+          </div>
+        </div>
+      );
+    }
+
+    // LEVEL INTRO SCREEN - Show only at start of playlist
+    if (showLevelIntro && currentRound === 1 && playlistId && playlistName && levelNumber) {
+      return (
+        <div className={`w-screen bg-black flex flex-col items-center justify-center p-4 sm:p-6${introExiting ? ' animate-intro-exit' : ''}`} style={{ minHeight: '100dvh' }}>
+          <div className="mb-6 sm:mb-12">
+            <p className="text-5xl sm:text-8xl font-black text-red-500" style={{ textShadow: '0 0 40px #ef4444', letterSpacing: '0.12em' }}>
+              ROWDY
+            </p>
+          </div>
+
+          <div className="text-center max-w-2xl w-full flex flex-col items-center">
+            <h1 className="text-3xl sm:text-5xl md:text-6xl font-bold text-cyan-400 mb-4 sm:mb-6" style={{ textShadow: '0 0 20px #00ffff' }}>
+              Level {levelNumber}: {playlistName}
+            </h1>
+
+            <p className="text-cyan-300 text-sm sm:text-base mb-6 sm:mb-8 max-w-md">
+              Get ready to tackle {totalRounds} challenges
+            </p>
+
+            <div className="bg-black border-2 border-cyan-400 rounded-lg p-4 sm:p-8 backdrop-blur" style={{ boxShadow: '0 0 15px rgba(0, 255, 255, 0.3)' }}>
+              <p className="text-xs sm:text-sm text-cyan-400">Starting in a moment...</p>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ICON-FORWARD INTRO SCREEN
+    return (
+      <div className={`w-screen bg-black flex flex-col items-center justify-center p-4 sm:p-6${introExiting ? ' animate-intro-exit' : ''}`} style={{ minHeight: '100dvh' }}>
+        {/* ROWDY BRANDING - TOP */}
+        <div className="mb-6 sm:mb-12">
+          <p className="text-5xl sm:text-8xl font-black text-red-500" style={{ textShadow: '0 0 40px #ef4444', letterSpacing: '0.12em' }}>
+            ROWDY
+          </p>
+        </div>
+
+        <div className="text-center max-w-2xl w-full flex flex-col items-center">
+          {/* Playlist badge */}
+          {playlistId && playlistName && (
+            <div className="mb-4">
+              <span className="inline-block px-3 py-1 text-xs bg-yellow-400/20 border border-yellow-400 text-yellow-300 rounded-full font-semibold" style={{ boxShadow: '0 0 10px rgba(251, 191, 36, 0.3)' }}>
+                {playlistName}
+              </span>
+            </div>
+          )}
+
+          {/* Round number - small */}
+          <div className="text-cyan-400 text-sm sm:text-base mb-4" style={{ textShadow: '0 0 8px #00ffff' }}>
+            Round {currentRound} of {totalRounds}
+          </div>
+
+          {/* Game icon - large line-art SVG */}
+          <div className="w-24 h-24 sm:w-32 sm:h-32 mb-6 text-cyan-400 mx-auto" style={{ filter: 'drop-shadow(0 0 20px #00ffff)' }}>
+            {GAME_ICONS[currentGame.id] || (
+              <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <circle cx="12" cy="12" r="9" />
+              </svg>
+            )}
+          </div>
+
+          {/* Game name - large and bold */}
+          <h2 className="text-3xl sm:text-4xl font-bold text-cyan-400 mb-4" style={{ textShadow: '0 0 15px #00ffff' }}>
+            {currentGame.name}
+          </h2>
+
+          {/* Instructions - small */}
+          <p className="text-cyan-300 text-xs sm:text-sm mb-6">
+            {currentGame.instructions}
+          </p>
+
+          {/* Session score if available */}
+          {currentSessionScore > 0 && (
+            <div className="mb-4">
+              <p className="text-sm text-cyan-400">Session Score: <span className="font-bold text-yellow-400">{Math.round(currentSessionScore)}</span></p>
+            </div>
+          )}
+
+          {/* Starting message */}
+          <div className="bg-black border-2 border-cyan-400 rounded-lg p-4 sm:p-6 backdrop-blur" style={{ boxShadow: '0 0 15px rgba(0, 255, 255, 0.3)' }}>
+            <p className="text-xs sm:text-sm text-cyan-400">Starting in a moment...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Results screen
+  if (gameState === 'results') {
+    console.log(`[GameSession] Rendering RoundResults screen, currentRound=${currentRound}, totalRounds=${totalRounds}`);
+    if (roundScores.length === 0) {
+      handleNextRound();
+      return null;
+    }
+
+    const lastRound = roundScores[roundScores.length - 1];
+
+    return (
+      <RoundResults
+        roundNumber={currentRound}
+        gameName={lastRound.gameName}
+        gameScore={lastRound.normalizedScore}
+        gameId={lastRound.gameId}
+        allRoundScores={roundScores.map(r => ({ gameId: r.gameId, gameName: r.gameName, score: r.normalizedScore }))}
+        totalSessionScore={Math.round(currentSessionScore)}
+        maxSessionScore={currentRound * 100}
+        onContinue={handleNextRound}
+        isLastRound={currentRound >= totalRounds}
+      />
+    );
+  }
+
+  const getGradeLabel = (score: number): string => {
+    if (score >= 100) return "Maxed Out!";
+    if (score >= 90) return "Amazeballs!";
+    if (score >= 80) return "Exceptional";
+    if (score >= 70) return "Very Good";
+    if (score >= 60) return "Well Done";
+    if (score >= 50) return "Above Average";
+    if (score >= 40) return "Pretty Good";
+    if (score >= 30) return "Needs Improvement";
+    if (score >= 20) return "Keep Trying";
+    if (score >= 10) return "Ouch!";
+    if (score > 0) return "Poor";
+    return "Didn't Even Try!";
+  };
+
+  // Complete screen
+  if (gameState === 'complete') {
+    console.log(`[GameSession] Rendering complete screen, roundScores.length=${roundScores.length}, showLeaderboard=${showLeaderboard}`);
+    if (roundScores.length === 0) {
+      onExit();
+      return null;
+    }
+
+    const gameScores = roundScores.map(r => r.normalizedScore);
+    const sessionTotal = calculateSessionScore(gameScores);
+
+    const celebrationTiles = roundScores.map((round) => ({
+      gameId: round.gameId,
+      gameName: round.gameName,
+      score: {
+        normalizedScore: round.normalizedScore.normalizedScore || 0,
+        timeBonus: round.normalizedScore.timeBonus || 0,
+        perfectScoreBonus: round.normalizedScore.perfectScoreBonus || 0,
+        totalWithBonus: round.normalizedScore.totalWithBonus || round.normalizedScore.normalizedScore || 0,
+      },
+    }));
+
+    const handleShowLeaderboard = () => {
+      console.log('[GameSession] handleShowLeaderboard called');
+      if (playlistId) {
+        anonymousSessionManager.advanceToNextPlaylist();
+      }
+      setShowLeaderboard(true);
+    };
+
+    const handleLeaderboardContinue = () => {
+      console.log('[GameSession] handleLeaderboardContinue called, calling onExit');
+      setShowLeaderboard(false);
+      onExit();
+    };
+
+    if (showLeaderboard) {
+      return (
+        <LeaderboardPostRound
+          currentUserId={user?.id ?? null}
+          playerName={user?.email?.split('@')[0] ?? null}
+          playlistId={playlistId ?? null}
+          playerScore={Math.round(sessionTotal.totalScore)}
+          onContinue={handleLeaderboardContinue}
+        />
+      );
+    }
+
+    return (
+      <div>
+        <CelebrationScreen
+          roundScores={celebrationTiles}
+          totalSessionScore={sessionTotal.totalScore}
+          maxSessionScore={sessionTotal.maxPossible}
+          onPlayAgain={handleShowLeaderboard}
+          totalRounds={totalRounds}
+          levelName={playlistName}
+          levelNumber={levelNumber}
+        />
+        <AuthModal
+          isOpen={showAuthModal}
+          onClose={() => setShowAuthModal(false)}
+          onContinueAsGuest={() => {
+            setPendingSessionData(null);
+          }}
+        />
+      </div>
+    );
+  }
+
+  // Loading screen between rounds
+  if (gameState === 'playing' && !currentGame) {
+    return (
+      <div className="w-screen bg-black flex items-center justify-center" style={{ minHeight: '100dvh' }}>
+        <div className="text-center px-4">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-4 border-cyan-400 mb-4 mx-auto" style={{ boxShadow: '0 0 15px rgba(0, 255, 255, 0.5)' }}></div>
+          <p className="text-cyan-400 text-base" style={{ textShadow: '0 0 10px #00ffff' }}>Loading Round {currentRound}...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Playing state - GAMEPLAY HEADER
+  if (gameState === 'playing' && currentGame) {
+    const GameComponent = currentGame.component;
+
+    const handleSoundToggle = (enabled: boolean) => {
+      setSoundEnabled(enabled);
+      const savedLevel = getSavedSfxLevel();
+      if (enabled) {
+        applySfxLevel(savedLevel === 'off' ? 'full' : savedLevel);
+      } else {
+        applySfxLevel('off');
+      }
+    };
+
+    return (
+      <div className="w-screen bg-black flex flex-col" style={{ height: '100dvh' }}>
+        <GameplayHeader
+          gameName={currentGame.name}
+          gameId={currentGame.id}
+          score={Math.round(currentSessionScore)}
+          currentRound={currentRound}
+          totalRounds={totalRounds}
+          onQuit={handleQuitAndSave}
+          soundEnabled={soundEnabled}
+          onSoundToggle={handleSoundToggle}
+        />
+
+        {/* Game Content */}
+        <div key={`game-content-${currentRound}`} className="flex-1 overflow-hidden animate-game-enter" style={{ minHeight: 0 }}>
+          <React.Suspense fallback={
+            <div className="h-full w-full flex items-center justify-center bg-black">
+              <div className="text-cyan-400 text-lg font-bold animate-pulse" style={{ textShadow: '0 0 10px #00ffff' }}>Loading...</div>
+            </div>
+          }>
+            <ErrorBoundary
+              context={{
+                source: 'GameComponent',
+                game_id: currentGame.id,
+                game_name: currentGame.name,
+                round: currentRound,
+                playlist_id: playlistId ?? null,
+                puzzle_id: currentPuzzleId,
+                puzzle_ids: currentPuzzleIds,
+                ranking_puzzle_id: currentRankingPuzzleId,
+                superlative_puzzle_id: currentSuperlativePuzzleId,
+              }}
+              onSkipRound={() => handleGameComplete(0, 100, 0)}
+              onReset={handleQuitAndSave}
+            >
+              <GameWrapper
+                duration={currentGame.duration}
+                onComplete={handleGameComplete}
+                gameName={currentGame.name}
+                onScoreUpdate={handleScoreUpdate}
+                debugMode={currentGame.id === 'debris' ? false : debugMode}
+              >
+                <GameComponent
+                  puzzleId={currentGame.id === 'superlative' ? (currentSuperlativePuzzleId ?? currentPuzzleId) : currentPuzzleId}
+                  puzzleIds={currentPuzzleIds}
+                  rankingPuzzleId={currentRankingPuzzleId}
+                  prefetchedPuzzles={currentGame.id === 'fake-out' ? prefetchedPuzzles : undefined}
+                  debugMode={currentGame.id === 'debris' ? false : debugMode}
+                  onQuit={currentGame.id === 'debris' && debugMode ? handleQuitAndSave : undefined}
+                />
+              </GameWrapper>
+            </ErrorBoundary>
+          </React.Suspense>
+        </div>
+      </div>
+    );
+  }
+
+  return <div className="w-screen bg-black" style={{ height: '100dvh' }} />;
+}

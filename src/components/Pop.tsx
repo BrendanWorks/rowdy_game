@@ -1,0 +1,770 @@
+import React, { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHandle, useMemo } from 'react';
+import { RoundCountdown } from './RoundCountdown';
+import { audioManager } from '../lib/audioManager';
+
+interface PopProps {
+  onScoreUpdate?: (score: number, maxScore: number) => void;
+  onComplete?: (score: number, maxScore: number, timeRemaining?: number) => void;
+  timeRemaining?: number;
+  duration?: number;
+}
+
+const MAX_SCORE = 1000;
+
+const THEME = {
+  color: '#3b82f6',
+  glow: 'rgba(59, 130, 246, 0.6)',
+  shadow: '0 0 10px rgba(59, 130, 246, 0.3)',
+  shadowStrong: '0 0 20px rgba(59, 130, 246, 0.4)',
+  textShadow: '0 0 10px #3b82f6'
+};
+
+const TONE_CONFIG = {
+  select: { freq: 800, duration: 0.1, type: 'sine' },
+  success: { freq: 523, duration: 0.3, type: 'sine' },
+  fail: { freq: 200, duration: 0.2, type: 'sawtooth' },
+  bonus: { freq: 659, duration: 0.5, type: 'sine' },
+  ambient: { freq: 100, duration: 0.1, type: 'sine' }
+} as const;
+
+const PROFANITY_WORDS = ['fuck', 'shit', 'damn', 'ass', 'bitch', 'hell', 'cunt'];
+
+const Pop = forwardRef<any, PopProps>((props, ref) => {
+  const fallbackWords = new Set([
+    'cat', 'dog', 'run', 'fun', 'sun', 'car', 'art', 'bat', 'hat', 'rat',
+    'can', 'man', 'pan', 'tan', 'van', 'ban', 'fan', 'ran', 'win', 'bin',
+    'big', 'dig', 'fig', 'pig', 'wig', 'bag', 'tag', 'leg', 'beg', 'egg',
+    'bug', 'hug', 'jug', 'mug', 'rug', 'cut', 'but', 'nut', 'put', 'sit',
+    'bit', 'fit', 'hit', 'kit', 'lit', 'top', 'hop', 'pop', 'got', 'hot',
+    'lot', 'not', 'pot', 'red', 'bed', 'bad', 'dad', 'had', 'mad', 'sad',
+    'all', 'old', 'any', 'may', 'day', 'way', 'say', 'try', 'dry', 'cry',
+    'fly', 'sky', 'new', 'low', 'how', 'now', 'saw', 'box', 'fox', 'mix',
+    'fix', 'six', 'age', 'ice', 'eye', 'die', 'lie', 'pie', 'tie', 'use',
+    'sea', 'tea', 'bee', 'see', 'too', 'boy', 'toy', 'job', 'oil', 'eat',
+    'book', 'look', 'took', 'cook', 'good', 'food', 'door', 'tree', 'free',
+    'blue', 'true', 'game', 'name', 'same', 'came', 'time', 'fire', 'wire',
+    'bird', 'word', 'work', 'walk', 'talk', 'rock', 'lock', 'love', 'move',
+    'live', 'give', 'hand', 'land', 'sand', 'wind', 'find', 'play', 'stay',
+    'home', 'come', 'some', 'make', 'take', 'back', 'pack', 'help', 'bell',
+    'tell', 'well', 'ball', 'call', 'fall', 'tall', 'wall', 'bill', 'fill',
+    'hill', 'will', 'gold', 'hold', 'cold', 'told', 'kind', 'mind', 'find',
+    'turn', 'burn', 'park', 'dark', 'mark', 'work', 'part', 'cart', 'fast',
+    'last', 'past', 'best', 'test', 'rest', 'just', 'must', 'face', 'race',
+    'nice', 'rice', 'once', 'done', 'gone', 'line', 'mine', 'fine', 'like',
+    'water', 'after', 'other', 'think', 'about', 'right', 'would', 'could',
+    'first', 'world', 'great', 'small', 'white', 'black', 'green', 'light',
+    'night', 'might', 'start', 'heart', 'party', 'happy', 'early', 'ready',
+    'money', 'funny', 'bread', 'great', 'plant', 'point', 'sound', 'round',
+    'letter', 'better', 'little', 'simple', 'people', 'purple', 'circle',
+    'hog', 'log', 'fog', 'cog', 'bog', 'jog', 'dog', 'sin', 'din', 'gin',
+    'pin', 'tin', 'fin', 'kin', 'dim', 'him', 'rim', 'gym', 'sum', 'gum',
+    'hum', 'rum', 'bum', 'yum', 'gun', 'bun', 'nun', 'pun', 'sub', 'rub',
+    'hub', 'pub', 'cub', 'tub', 'mud', 'bud', 'cud', 'dud', 'hut', 'gut',
+    'jut', 'rut', 'shut', 'what', 'that', 'chat', 'flat', 'brat', 'spat',
+    'scat', 'spot', 'shot', 'slot', 'plot', 'clot', 'blot', 'snot', 'trot',
+    'drop', 'crop', 'prop', 'shop', 'chop', 'stop', 'flop', 'plop', 'mop',
+    'sip', 'nip', 'dip', 'hip', 'lip', 'rip', 'tip', 'zip', 'grip', 'trip',
+    'slip', 'flip', 'clip', 'ship', 'chip', 'whip', 'skip', 'drip', 'strip',
+    'snap', 'trap', 'wrap', 'clap', 'flap', 'slap', 'chap', 'gap', 'lap',
+    'map', 'nap', 'rap', 'sap', 'tap', 'cap', 'zap', 'step', 'prep', 'rep',
+    'pep', 'yep', 'grip', 'drip', 'strip', 'chip', 'whip', 'skip', 'trip',
+    'slip', 'flip', 'clip', 'ship', 'snap', 'trap', 'wrap', 'clap', 'flap',
+    'glad', 'brad', 'chad', 'shad', 'grad', 'clad', 'scad', 'bid', 'did',
+    'hid', 'kid', 'lid', 'rid', 'skid', 'grid', 'slid', 'god', 'nod', 'pod',
+    'rod', 'sod', 'cod', 'plod', 'prod', 'clod', 'shod', 'trod', 'broad'
+  ]);
+
+  const validateWord = async (word: string) => {
+    const cleanWord = word.toLowerCase().trim();
+
+    if (cleanWord.length < 2) return false;
+
+    const consonantOnly = /^[bcdfghjklmnpqrstvwxyz]+$/i.test(cleanWord);
+    const vowelOnly = /^[aeiou]+$/i.test(cleanWord);
+    if (consonantOnly || vowelOnly) {
+      return false;
+    }
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2000);
+
+      const response = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${cleanWord}`, {
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data && Array.isArray(data) && data.length > 0 &&
+            data[0].meanings && Array.isArray(data[0].meanings) &&
+            data[0].meanings.length > 0 && data[0].meanings[0].definitions &&
+            Array.isArray(data[0].meanings[0].definitions) &&
+            data[0].meanings[0].definitions.length > 0) {
+          return true;
+        }
+      }
+    } catch (error) {
+    }
+
+    return fallbackWords.has(cleanWord);
+  };
+
+  const [gameState, setGameState] = useState('splash');
+
+  const splashDecorations = useMemo(() => {
+    const labels = ['F*CK', 'SH*T', 'A**', 'D*MN', 'B*TCH', '!@#$'];
+    return Array.from({ length: 18 }, (_, i) => ({
+      label: labels[i % 6],
+      left: Math.random() * 90 + 5,
+      top: Math.random() * 90 + 5,
+      rotate: Math.random() * 60 - 30,
+      fontSize: Math.random() * 20 + 14
+    }));
+  }, []);
+
+  const [letters, setLetters] = useState<any[]>([]);
+  const [poppingLetters, setPoppingLetters] = useState<any[]>([]);
+  const [selectedLetters, setSelectedLetters] = useState<any[]>([]);
+  const [score, setScore] = useState(0);
+  const [level, setLevel] = useState(1);
+  const [gameSpeed, setGameSpeed] = useState(1800);
+  const [nextId, setNextId] = useState(0);
+  const [timeLeft, setTimeLeft] = useState(60);
+  const [wordsFound, setWordsFound] = useState<any[]>([]);
+  const [isValidating, setIsValidating] = useState(false);
+  const [timerStarted, setTimerStarted] = useState(false);
+  const [scoreNotifications, setScoreNotifications] = useState<any[]>([]);
+  const submissionInProgress = useRef(false);
+  const audioContext = useRef<any>(null);
+  const audioBuffers = useRef(new Map());
+  const audioInitialized = useRef(false);
+  const roundEndTimeoutRef = useRef<any>(null);
+  const onCompleteRef = useRef(props.onComplete);
+  const bgMusicRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    onCompleteRef.current = props.onComplete;
+  }, [props.onComplete]);
+
+  useImperativeHandle(ref, () => ({
+    getGameScore: () => ({
+      score: score,
+      maxScore: MAX_SCORE
+    }),
+    onGameEnd: () => {
+      if (gameState === 'roundEnd') return;
+
+      if (roundEndTimeoutRef.current) {
+        clearTimeout(roundEndTimeoutRef.current);
+      }
+      setGameState('roundEnd');
+    },
+    muteTimerSounds: true,
+    pauseTimer: gameState !== 'playing' || !timerStarted,
+    canSkipQuestion: false
+  }), [gameState, timerStarted]);
+
+  const letterPool = 'AAAAAAAAEEEEEEEEIIIIIIIIOOOOOOOOUURRBBBCCCDDDFFFFGGGHHHJKKLLLMMMNNNNPPQRRRSSSSTTTTVWWXYZ';
+
+  const initAudio = useCallback(async () => {
+    if (audioInitialized.current) return;
+    try {
+      audioContext.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      audioInitialized.current = true;
+    } catch {
+    }
+  }, []);
+
+  const generateTone = useCallback((soundName: keyof typeof TONE_CONFIG, volume = 0.3) => {
+    const ctx = audioContext.current;
+    if (!ctx) return;
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+      return;
+    }
+    const oscillator = ctx.createOscillator();
+    const gainNode = ctx.createGain();
+    const config = TONE_CONFIG[soundName] || TONE_CONFIG.select;
+    oscillator.frequency.setValueAtTime(config.freq, ctx.currentTime);
+    oscillator.type = config.type;
+    gainNode.gain.setValueAtTime(0, ctx.currentTime);
+    gainNode.gain.linearRampToValueAtTime(volume * 0.3, ctx.currentTime + 0.01);
+    gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + config.duration);
+    oscillator.connect(gainNode);
+    gainNode.connect(ctx.destination);
+    oscillator.start(ctx.currentTime);
+    oscillator.stop(ctx.currentTime + config.duration);
+  }, []);
+
+  const playSound = useCallback((soundName: keyof typeof TONE_CONFIG, volume = 0.3) => {
+    if (!audioManager.isEnabled()) return;
+    if (!audioInitialized.current || !audioContext.current) return;
+    if (audioContext.current.state === 'suspended') {
+      audioContext.current.resume().then(() => generateTone(soundName, volume)).catch(() => {});
+      return;
+    }
+    generateTone(soundName, volume);
+  }, [generateTone]);
+
+  const initAudioOnFirstTouch = useCallback(() => {
+    if (audioContext.current?.state === 'suspended') {
+      audioContext.current.resume().catch(() => {});
+    }
+    initAudio();
+  }, [initAudio]);
+
+  useEffect(() => {
+    const unsubscribe = audioManager.onEnabledChange((enabled) => {
+      if (!bgMusicRef.current) return;
+      if (enabled) {
+        if (!bgMusicRef.current.paused) return;
+      } else {
+        bgMusicRef.current.pause();
+      }
+    });
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    initAudio();
+
+    const handleFirstInteraction = () => {
+      initAudioOnFirstTouch();
+      document.removeEventListener('touchstart', handleFirstInteraction);
+      document.removeEventListener('click', handleFirstInteraction);
+    };
+
+    document.addEventListener('touchstart', handleFirstInteraction, { passive: true });
+    document.addEventListener('click', handleFirstInteraction, { passive: true });
+
+    const bgAudio = new Audio('/sounds/global/CountdownMusical60s.mp3');
+    bgAudio.loop = false;
+    bgAudio.volume = 0.4;
+    bgMusicRef.current = bgAudio;
+
+    return () => {
+      document.removeEventListener('touchstart', handleFirstInteraction);
+      document.removeEventListener('click', handleFirstInteraction);
+      if (roundEndTimeoutRef.current) {
+        clearTimeout(roundEndTimeoutRef.current);
+      }
+      bgAudio.pause();
+      bgAudio.src = '';
+    };
+  }, [initAudio, initAudioOnFirstTouch]);
+
+  const getRandomLetter = () => {
+    return letterPool[Math.floor(Math.random() * letterPool.length)];
+  };
+
+  const createLetters = useCallback(() => {
+    const newLetters = [];
+    const shouldCluster = Math.random() < 0.7;
+    const maxWidth = 650;
+
+    if (shouldCluster) {
+      const clusterSize = Math.floor(Math.random() * 3) + 3;
+      const baseX = Math.random() * (maxWidth - 100) + 50;
+      const baseY = -70;
+
+      for (let i = 0; i < clusterSize; i++) {
+        newLetters.push({
+          id: nextId + i,
+          letter: getRandomLetter(),
+          x: Math.max(5, Math.min(maxWidth - 5, baseX + (Math.random() - 0.5) * 160)),
+          y: baseY - (i * 70) - (Math.random() * 40),
+          selected: false
+        });
+      }
+      setNextId(prev => prev + clusterSize);
+    } else {
+      const singleCount = Math.random() < 0.6 ? 2 : 1;
+      for (let i = 0; i < singleCount; i++) {
+        newLetters.push({
+          id: nextId + i,
+          letter: getRandomLetter(),
+          x: Math.random() * (maxWidth - 10) + 5,
+          y: -70 - (i * 80),
+          selected: false
+        });
+      }
+      setNextId(prev => prev + singleCount);
+    }
+
+    return newLetters;
+  }, [nextId]);
+
+  useEffect(() => {
+    if (gameState === 'playing' && !timerStarted && letters.length > 0) {
+      setTimerStarted(true);
+    }
+  }, [gameState, timerStarted, letters.length]);
+
+  useEffect(() => {
+    if (gameState !== 'playing' || !timerStarted) return;
+
+    const interval = setInterval(() => {
+      setTimeLeft(prev => {
+        const newTime = prev - 1;
+        if (newTime <= 0) {
+          setGameState('roundEnd');
+        }
+        return Math.max(0, newTime);
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [gameState, timerStarted]);
+
+  useEffect(() => {
+    if (gameState !== 'playing') return;
+
+    const interval = setInterval(() => {
+      const newLetters = createLetters();
+      setLetters(prev => [...prev, ...newLetters]);
+    }, gameSpeed);
+
+    return () => clearInterval(interval);
+  }, [gameState, gameSpeed, createLetters]);
+
+  useEffect(() => {
+    if (gameState !== 'playing') return;
+
+    const interval = setInterval(() => {
+      setLetters(prev => {
+        const updated = prev.map(letter => ({
+          ...letter,
+          y: letter.y + 0.8
+        }));
+
+        return updated.filter(letter => letter.y < 450);
+      });
+    }, 50);
+
+    return () => clearInterval(interval);
+  }, [gameState]);
+
+  useEffect(() => {
+    if (gameState !== 'playing') return;
+
+    const interval = setInterval(() => {
+      const now = Date.now();
+      setPoppingLetters(prev => prev.filter(letter => now - letter.popTime < 800));
+      setScoreNotifications(prev => prev.filter(notification => now - notification.showTime < 1500));
+    }, 100);
+
+    return () => clearInterval(interval);
+  }, [gameState]);
+
+  useEffect(() => {
+    if (gameState !== 'playing' || !timerStarted) return;
+
+    const elapsedTime = 60 - timeLeft;
+
+    if (elapsedTime === 20) {
+      setGameSpeed(prev => Math.max(1500, prev - 200));
+    } else if (elapsedTime === 40) {
+      setGameSpeed(prev => Math.max(1200, prev - 200));
+    }
+  }, [timeLeft, gameState, timerStarted]);
+
+  useEffect(() => {
+    if (gameState === 'roundEnd' && bgMusicRef.current) {
+      bgMusicRef.current.pause();
+      bgMusicRef.current.currentTime = 0;
+    }
+  }, [gameState]);
+
+  useEffect(() => {
+    if (gameState === 'roundEnd') {
+      roundEndTimeoutRef.current = setTimeout(() => {
+        const callback = onCompleteRef.current;
+        if (callback) {
+          callback(score, MAX_SCORE, 0);
+        }
+      }, 2500);
+
+      return () => {
+        if (roundEndTimeoutRef.current) {
+          clearTimeout(roundEndTimeoutRef.current);
+        }
+      };
+    }
+  }, [gameState, score]);
+
+  const selectLetter = (letterId: number) => {
+    if (selectedLetters.find(l => l.id === letterId)) return;
+
+    const letter = letters.find(l => l.id === letterId);
+    if (!letter) return;
+
+    playSound('select', 0.2);
+
+    setSelectedLetters(prev => [...prev, letter]);
+    setLetters(prev => prev.map(l =>
+      l.id === letterId ? { ...l, selected: true } : l
+    ));
+  };
+
+  const submitWord = async () => {
+    if (submissionInProgress.current || selectedLetters.length === 0) {
+      return;
+    }
+
+    submissionInProgress.current = true;
+    setIsValidating(true);
+
+    const word = selectedLetters.map((l: any) => l.letter).join('').toLowerCase();
+
+    if (word.length < 2) {
+      clearSelection();
+      submissionInProgress.current = false;
+      return;
+    }
+
+    const currentSelection = [...selectedLetters];
+    const letterIds = currentSelection.map(l => l.id);
+
+    setSelectedLetters([]);
+    setLetters(prev => prev.map(l =>
+      letterIds.includes(l.id) ? { ...l, selected: false } : l
+    ));
+
+    try {
+      const isValid = await validateWord(word);
+
+      if (isValid) {
+        const isProfanity = await checkProfanity(word);
+
+        if (isProfanity) {
+          playSound('bonus', 0.6);
+        } else {
+          playSound('success', 0.4);
+        }
+
+        const lettersToRemove = letters.filter(l => letterIds.includes(l.id));
+
+        const avgX = lettersToRemove.reduce((sum, letter) => sum + letter.x, 0) / lettersToRemove.length;
+        const avgY = lettersToRemove.reduce((sum, letter) => sum + letter.y, 0) / lettersToRemove.length;
+
+        setPoppingLetters(prev => [...prev, ...lettersToRemove.map(letter => ({
+          ...letter,
+          popTime: Date.now()
+        }))]);
+
+        setLetters(prev => prev.filter(l => !letterIds.includes(l.id)));
+
+        let wordScore = word.length * word.length * 5;
+
+        if (isProfanity) {
+          wordScore *= 4;
+        }
+
+        setScoreNotifications(prev => [...prev, {
+          id: Date.now(),
+          score: wordScore,
+          x: avgX,
+          y: avgY,
+          isProfanity: isProfanity,
+          showTime: Date.now()
+        }]);
+
+        setScore(prev => {
+          const newScore = prev + wordScore;
+          if (props.onScoreUpdate) {
+            props.onScoreUpdate(newScore, MAX_SCORE);
+          }
+          return newScore;
+        });
+        setWordsFound(prev => [...prev, { word, score: wordScore }]);
+      } else {
+        playSound('fail', 0.3);
+      }
+    } finally {
+      setIsValidating(false);
+      submissionInProgress.current = false;
+    }
+  };
+
+  const clearSelection = () => {
+    const letterIds = selectedLetters.map(l => l.id);
+    setLetters(prev => prev.map(l =>
+      letterIds.includes(l.id) ? { ...l, selected: false } : l
+    ));
+    setSelectedLetters([]);
+  };
+
+  const startGame = () => {
+    setGameState('playing');
+    setPoppingLetters([]);
+    setSelectedLetters([]);
+    setScore(0);
+    setLevel(1);
+    setGameSpeed(1800);
+    setWordsFound([]);
+    setIsValidating(false);
+    setTimerStarted(false);
+    setScoreNotifications([]);
+    submissionInProgress.current = false;
+
+    const profanityWord = PROFANITY_WORDS[Math.floor(Math.random() * PROFANITY_WORDS.length)];
+
+    const initialLetters = [];
+    const screenHeight = 300;
+    const maxWidth = 650;
+    const topZoneHeight = screenHeight * 0.4;
+    const numInitialLetters = 28;
+
+    const profanityLetters = profanityWord.split('').map((letter, index) => ({
+      id: index,
+      letter: letter.toUpperCase(),
+      x: Math.random() * (maxWidth - 10) + 5,
+      y: Math.random() * (topZoneHeight + 100) - 70,
+      selected: false
+    }));
+
+    const fillerCount = numInitialLetters - profanityLetters.length;
+    const fillerLetters = Array.from({ length: fillerCount }, (_, index) => ({
+      id: profanityLetters.length + index,
+      letter: getRandomLetter(),
+      x: Math.random() * (maxWidth - 10) + 5,
+      y: Math.random() * (topZoneHeight + 100) - 70,
+      selected: false
+    }));
+
+    initialLetters.push(...profanityLetters, ...fillerLetters);
+
+    setLetters(initialLetters);
+    setNextId(numInitialLetters);
+    setTimeLeft(60);
+
+    setTimeout(() => {
+      if (audioContext.current?.state === 'suspended') {
+        audioContext.current.resume().catch(() => {});
+      }
+      playSound('ambient', 0.1);
+      if (bgMusicRef.current && audioManager.isEnabled()) {
+        bgMusicRef.current.currentTime = 0;
+        const playPromise = bgMusicRef.current.play();
+        if (playPromise) {
+          playPromise.catch(() => {
+            const retryPlay = () => {
+              if (bgMusicRef.current && audioManager.isEnabled()) {
+                bgMusicRef.current.play().catch(() => {});
+              }
+              document.removeEventListener('touchstart', retryPlay);
+              document.removeEventListener('click', retryPlay);
+            };
+            document.addEventListener('touchstart', retryPlay, { once: true });
+            document.addEventListener('click', retryPlay, { once: true });
+          });
+        }
+      }
+    }, 500);
+  };
+
+  const resetGame = () => {
+    setGameState('countdown');
+    setLetters([]);
+    setPoppingLetters([]);
+    setSelectedLetters([]);
+    setWordsFound([]);
+    setIsValidating(false);
+    setTimerStarted(false);
+    setScoreNotifications([]);
+    submissionInProgress.current = false;
+    if (roundEndTimeoutRef.current) {
+      clearTimeout(roundEndTimeoutRef.current);
+    }
+  };
+
+  const checkProfanity = async (word: string) => {
+    try {
+      const response = await fetch(`https://www.purgomalum.com/service/containsprofanity?text=${word}`);
+      const isProfanity = await response.text();
+      return isProfanity === 'true';
+    } catch (error) {
+      return false;
+    }
+  };
+
+  if (gameState === 'splash') {
+    return (
+      <div
+        className="relative flex flex-col items-center justify-center h-full bg-black text-white overflow-hidden cursor-pointer select-none"
+        onClick={() => setGameState('countdown')}
+        onTouchEnd={(e) => { e.preventDefault(); setGameState('countdown'); }}
+      >
+        <div className="absolute inset-0 pointer-events-none overflow-hidden">
+          {splashDecorations.map((d, i) => (
+            <div
+              key={i}
+              className="absolute font-black opacity-10 text-blue-400"
+              style={{
+                left: `${d.left}%`,
+                top: `${d.top}%`,
+                transform: `rotate(${d.rotate}deg)`,
+                fontSize: `${d.fontSize}px`,
+                filter: 'blur(1px)'
+              }}
+            >
+              {d.label}
+            </div>
+          ))}
+        </div>
+
+        <div className="relative z-10 flex flex-col items-center gap-4 px-6 text-center">
+          <div
+            className="text-5xl sm:text-6xl font-black uppercase tracking-tight leading-none"
+            style={{
+              color: '#facc15',
+              textShadow: '0 0 30px rgba(250, 204, 21, 0.8), 0 0 60px rgba(250, 204, 21, 0.4)',
+              WebkitTextStroke: '1px rgba(250, 204, 21, 0.5)'
+            }}
+          >
+            Rowdy Loves<br />Profanity!
+          </div>
+          <div
+            className="text-xl sm:text-2xl font-bold uppercase tracking-wide"
+            style={{
+              color: '#f97316',
+              textShadow: '0 0 15px rgba(249, 115, 22, 0.7)'
+            }}
+          >
+            Big Bonus for Potty Mouths
+          </div>
+          <div
+            className="mt-6 text-sm text-blue-400 animate-pulse"
+            style={{ textShadow: '0 0 8px rgba(96, 165, 250, 0.6)' }}
+          >
+            Tap to continue
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (gameState === 'countdown') {
+    return (
+      <div className="relative flex flex-col items-center justify-center h-full bg-black text-white overflow-hidden">
+        <RoundCountdown onComplete={startGame} />
+      </div>
+    );
+  }
+
+  if (gameState === 'roundEnd') {
+    return null;
+  }
+
+  return (
+    <div className="relative w-full max-w-2xl mx-auto bg-black overflow-hidden border-2 border-blue-400/30 h-full">
+
+      <div className="relative w-full pt-2 pb-20" style={{ height: '300px' }}>
+        {letters.map(letter => (
+          <div
+            key={letter.id}
+            onClick={() => selectLetter(letter.id)}
+            className={`absolute w-14 h-14 rounded-full flex items-center justify-center font-bold text-lg cursor-pointer transform transition-all duration-200 border-2 ${
+              letter.selected
+                ? 'bg-yellow-400/20 border-yellow-400 text-yellow-400 scale-110'
+                : 'bg-black/80 border-blue-400 text-blue-400 hover:scale-105'
+            }`}
+            style={{
+              left: `${letter.x}px`,
+              top: `${letter.y}px`,
+              boxShadow: letter.selected ? '0 0 20px #fbbf24' : THEME.shadow
+            }}
+          >
+            {letter.letter}
+          </div>
+        ))}
+
+        {poppingLetters.map(letter => {
+          const elapsed = Date.now() - letter.popTime;
+          const progress = elapsed / 800;
+          const scale = 1 + (progress * 2);
+          const opacity = Math.max(0, 1 - progress);
+
+          return (
+            <div
+              key={`pop-${letter.id}`}
+              className="absolute w-14 h-14 rounded-full flex items-center justify-center font-bold text-lg pointer-events-none bg-green-500/30 border-2 border-green-500 text-green-400"
+              style={{
+                left: `${letter.x}px`,
+                top: `${letter.y}px`,
+                transform: `scale(${scale})`,
+                opacity: opacity,
+                transition: 'none',
+                boxShadow: '0 0 30px rgba(34, 197, 94, 0.8)'
+              }}
+            >
+              {letter.letter}
+            </div>
+          );
+        })}
+
+        {scoreNotifications.map(notification => {
+          const elapsed = Date.now() - notification.showTime;
+          const progress = elapsed / 1500;
+          const yOffset = progress * 60;
+          const opacity = Math.max(0, 1 - progress);
+
+          return (
+            <div
+              key={`score-${notification.id}`}
+              className={`absolute pointer-events-none text-2xl font-bold ${
+                notification.isProfanity
+                  ? 'text-yellow-400'
+                  : 'text-green-400'
+              }`}
+              style={{
+                left: `${notification.x}px`,
+                top: `${notification.y - yOffset}px`,
+                opacity: opacity,
+                transition: 'none',
+                textShadow: notification.isProfanity ? '0 0 20px #fbbf24' : '0 0 15px #22c55e',
+                fontWeight: notification.isProfanity ? '900' : '700'
+              }}
+            >
+              +{notification.score}{notification.isProfanity ? '!' : ''}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="absolute bottom-0 left-0 right-0 bg-black border-t-2 border-blue-400/50 text-white p-2.5">
+        <div className="mb-2">
+          <div className="text-center text-xs text-blue-400 mb-1">Selected Word:</div>
+          <div className="text-center text-lg font-bold min-h-7 bg-black border-2 border-blue-400/50 rounded px-3 py-1 text-blue-300" style={{ boxShadow: 'inset 0 0 10px rgba(59, 130, 246, 0.2)' }}>
+            {selectedLetters.map((l: any) => l.letter).join('')}
+          </div>
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            onClick={submitWord}
+            disabled={selectedLetters.length === 0 || isValidating}
+            className="flex-1 bg-transparent border-2 border-blue-400 text-blue-400 font-bold py-2 px-4 rounded-lg transition-all hover:bg-blue-400 hover:text-black disabled:border-blue-400/30 disabled:text-blue-400/30 disabled:hover:bg-transparent active:scale-95"
+            style={selectedLetters.length > 0 && !isValidating ? { textShadow: THEME.textShadow, boxShadow: THEME.shadow } : {}}
+          >
+            {isValidating ? 'Checking...' : 'Submit Word'}
+          </button>
+          <button
+            onClick={clearSelection}
+            disabled={selectedLetters.length === 0}
+            className="bg-transparent border-2 border-red-500 text-red-400 font-bold py-2 px-4 rounded-lg transition-all hover:bg-red-500 hover:text-black disabled:border-red-500/30 disabled:text-red-400/30 disabled:hover:bg-transparent active:scale-95"
+            style={selectedLetters.length > 0 ? { textShadow: '0 0 10px #ef4444', boxShadow: '0 0 15px rgba(239, 68, 68, 0.3)' } : {}}
+          >
+            Clear
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+Pop.displayName = 'Pop';
+
+export default Pop;

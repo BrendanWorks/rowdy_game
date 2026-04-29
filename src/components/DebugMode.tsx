@@ -1,0 +1,458 @@
+import React, { useState, useEffect } from 'react';
+import {
+  Search, Camera, Triangle, Square, Circle, Users, Check,
+  ChartBar, Shuffle, CircleX, Layers, BookOpen, Gamepad2,
+  ThumbsUp, Zap, ArrowUpDown
+} from 'lucide-react';
+import Leaderboard from './Leaderboard';
+import { supabase } from '../lib/supabase';
+import GameWrapper from './GameWrapper';
+
+const OddManOut = React.lazy(() => import('./OddManOut'));
+const PhotoMystery = React.lazy(() => import('./PhotoMystery.jsx'));
+const RankAndRoll = React.lazy(() => import('./RankAndRoll'));
+const SnapShot = React.lazy(() => import('./SnapShot'));
+const SplitDecision = React.lazy(() => import('./SplitDecision'));
+const Snake = React.lazy(() => import('./Snake'));
+const FakeOut = React.lazy(() => import('./FakeOut'));
+const HiveMind = React.lazy(() => import('./HiveMind'));
+const Superlative = React.lazy(() => import('./Superlative'));
+const TrueFalse = React.lazy(() => import('./TrueFalse'));
+const MultipleChoice = React.lazy(() => import('./MultipleChoice'));
+const Tracer = React.lazy(() => import('./Tracer'));
+const Clutch = React.lazy(() => import('./Clutch'));
+const Flashbang = React.lazy(() => import('./Flashbang'));
+const Recall = React.lazy(() => import('./Recall'));
+const ColorClash = React.lazy(() => import('./ColorClash'));
+const Slot = React.lazy(() => import('./Slot'));
+const Pivot = React.lazy(() => import('./Pivot'));
+const Debris = React.lazy(() => import('./Debris'));
+const ZenGravity = React.lazy(() => import('./ZenGravity'));
+const Pop = React.lazy(() => import('./Pop'));
+const UpYours = React.lazy(() => import('./UpYours'));
+import GameSession from './GameSession';
+import CelebrationScreen from './CelebrationScreen';
+
+const GAME_ICONS_LOOKUP: Record<string, React.ReactNode> = {
+  'odd-man-out': <CircleX className="w-full h-full" />,
+  'photo-mystery': <Search className="w-full h-full" />,
+  'rank-and-roll': <ArrowUpDown className="w-full h-full" />,
+  'snapshot': <Camera className="w-full h-full" />,
+  'split-decision': <Layers className="w-full h-full" />,
+  'snake': <Gamepad2 className="w-full h-full" />,
+  'fake-out': <CircleX className="w-full h-full" />,
+  'hive-mind': <Users className="w-full h-full" />,
+  'superlative': <ThumbsUp className="w-full h-full" />,
+  'true-false': <Shuffle className="w-full h-full" />,
+  'multiple-choice': <Check className="w-full h-full" />,
+  'tracer': <Zap className="w-full h-full" />,
+  'clutch': <Gamepad2 className="w-full h-full" />,
+  'flashbang': <Zap className="w-full h-full" />,
+  'recall': <Zap className="w-full h-full" />,
+  'color-clash': <Circle className="w-full h-full" />,
+  'slot': <Square className="w-full h-full" />,
+  'pivot': <BookOpen className="w-full h-full" />,
+  'debris': <Zap className="w-full h-full" />,
+  'zen-gravity': <Circle className="w-full h-full" />,
+  'pop': <Circle className="w-full h-full" />,
+  'up-yours': <Triangle className="w-full h-full" />,
+};
+
+interface DebugModeProps {
+  onExit: () => void;
+}
+
+const TEST_GAMES = [
+  { id: 'odd-man-out', name: 'Odd Man Out', duration: 60, component: OddManOut },
+  { id: 'photo-mystery', name: 'Zooma', duration: 15, component: PhotoMystery },
+  { id: 'rank-and-roll', name: 'Ranky', duration: 30, component: RankAndRoll },
+  { id: 'snapshot', name: 'Jigsaw', duration: 60, component: SnapShot },
+  { id: 'split-decision', name: 'Split Decision', duration: 60, component: SplitDecision },
+  { id: 'snake', name: 'Snake', duration: 75, component: Snake },
+  { id: 'fake-out', name: 'Fake Out', duration: 60, component: FakeOut },
+  { id: 'hive-mind', name: 'Hive Mind', duration: 60, component: HiveMind },
+  { id: 'superlative', name: 'Superlative', duration: 90, component: Superlative },
+  { id: 'true-false', name: 'True or False', duration: 90, component: TrueFalse },
+  { id: 'multiple-choice', name: 'Multiple Choice', duration: 90, component: MultipleChoice },
+  { id: 'tracer', name: 'Tracer', duration: 120, component: Tracer },
+  { id: 'clutch', name: 'Clutch', duration: 60, component: Clutch },
+  { id: 'flashbang', name: 'Flashbang', duration: 45, component: Flashbang },
+  { id: 'recall', name: 'Recall', duration: 60, component: Recall },
+  { id: 'color-clash', name: 'Color Clash', duration: 30, component: ColorClash },
+  { id: 'slot', name: 'Slot', duration: 600, component: Slot },
+  { id: 'pivot', name: 'Pivot', duration: 60, component: Pivot },
+  { id: 'debris', name: 'Debris', duration: 75, component: Debris },
+  { id: 'zen-gravity', name: 'Balls', duration: 60, component: ZenGravity },
+  { id: 'pop', name: 'Pop', duration: 60, component: Pop },
+  { id: 'up-yours', name: 'UpYours', duration: 120, component: UpYours },
+];
+
+interface Playlist {
+  id: number;
+  name: string;
+  description: string;
+  difficulty: string;
+}
+
+interface DebugGameViewProps {
+  game: typeof TEST_GAMES[number];
+  GameComponent: React.ComponentType<any>;
+  slotPuzzleIds: number[] | null;
+  pivotPuzzleIds: number[] | null;
+  onExit: () => void;
+}
+
+function DebugGameView({ game, GameComponent, slotPuzzleIds, pivotPuzzleIds, onExit }: DebugGameViewProps) {
+
+  return (
+    <div className="h-screen w-screen bg-gray-900 flex flex-col">
+      <div className="flex-shrink-0 bg-gray-800 px-3 sm:px-6 py-2.5 sm:py-4 border-b border-gray-700">
+        <div className="flex justify-between items-center max-w-6xl mx-auto gap-3">
+          <div className="text-white min-w-0 flex-1">
+            <p className="text-xs sm:text-sm text-gray-400">Debug Mode</p>
+            <p className="text-base sm:text-lg font-bold truncate">Testing {game.name}</p>
+          </div>
+          <button
+            onClick={onExit}
+            className="flex-shrink-0 px-3 sm:px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors text-sm sm:text-base touch-manipulation"
+          >
+            Back
+          </button>
+        </div>
+      </div>
+      <div className="flex-1 overflow-hidden">
+        <React.Suspense fallback={
+          <div className="h-full w-full flex items-center justify-center bg-gray-900">
+            <div className="text-gray-400 text-lg animate-pulse">Loading...</div>
+          </div>
+        }>
+          <GameWrapper
+            duration={game.duration}
+            onComplete={onExit}
+            gameName={game.name}
+            onScoreUpdate={() => {}}
+          >
+            {game.id === 'fake-out' ? (
+              <GameComponent puzzleIds={[777, 778, 779, 780, 781]} />
+            ) : game.id === 'slot' && slotPuzzleIds ? (
+              <GameComponent puzzleIds={slotPuzzleIds} />
+            ) : game.id === 'pivot' && pivotPuzzleIds ? (
+              <GameComponent puzzleIds={pivotPuzzleIds} />
+            ) : (
+              <GameComponent />
+            )}
+          </GameWrapper>
+        </React.Suspense>
+      </div>
+    </div>
+  );
+}
+
+export default function DebugMode({ onExit }: DebugModeProps) {
+  const [view, setView] = useState<'menu' | 'game' | 'playlist' | 'celebration'>('menu');
+  const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
+  const [selectedPlaylistId, setSelectedPlaylistId] = useState<number | null>(null);
+  const [playlists, setPlaylists] = useState<Playlist[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [slotPuzzleIds, setSlotPuzzleIds] = useState<number[] | null>(null);
+  const [pivotPuzzleIds, setPivotPuzzleIds] = useState<number[] | null>(null);
+
+  useEffect(() => {
+    const loadPlaylists = async () => {
+      setLoading(true);
+      try {
+        const { data, error } = await supabase
+          .from('playlists')
+          .select('id, name, description, difficulty')
+          .eq('is_active', true)
+          .order('sequence_order');
+
+        if (error) throw error;
+        setPlaylists(data || []);
+      } catch {
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    const loadSlotPuzzles = async () => {
+      const { data } = await supabase
+        .from('puzzles')
+        .select('id')
+        .eq('game_id', 25)
+        .order('id');
+      if (data && data.length > 0) {
+        setSlotPuzzleIds(data.map((p: { id: number }) => p.id));
+      }
+    };
+
+    const loadPivotPuzzles = async () => {
+      const { data } = await supabase
+        .from('puzzles')
+        .select('id')
+        .eq('game_id', 26)
+        .order('id');
+      if (data && data.length > 0) {
+        setPivotPuzzleIds(data.map((p: { id: number }) => p.id));
+      }
+    };
+
+    loadPlaylists();
+    loadSlotPuzzles();
+    loadPivotPuzzles();
+  }, []);
+
+  if (view === 'celebration') {
+    const mockRoundScores = [
+      {
+        gameId: 'odd-man-out',
+        gameName: 'Odd Man Out',
+        score: { correct: 8, incorrect: 2, timeBonus: 50, perfectScoreBonus: 0 }
+      },
+      {
+        gameId: 'photo-mystery',
+        gameName: 'Zooma',
+        score: { correct: 6, incorrect: 1, timeBonus: 75, perfectScoreBonus: 0 }
+      },
+      {
+        gameId: 'rank-and-roll',
+        gameName: 'Ranky',
+        score: { correct: 9, incorrect: 0, timeBonus: 100, perfectScoreBonus: 100 }
+      },
+      {
+        gameId: 'snapshot',
+        gameName: 'Jigsaw',
+        score: { correct: 5, incorrect: 3, timeBonus: 25, perfectScoreBonus: 0 }
+      },
+      {
+        gameId: 'split-decision',
+        gameName: 'Split Decision',
+        score: { correct: 7, incorrect: 2, timeBonus: 60, perfectScoreBonus: 0 }
+      },
+    ];
+
+    return (
+      <div className="h-screen w-screen bg-black flex flex-col">
+        <div className="flex-shrink-0 bg-gray-800 px-3 sm:px-6 py-2.5 sm:py-4 border-b border-gray-700">
+          <div className="flex justify-between items-center max-w-6xl mx-auto gap-3">
+            <div className="text-white min-w-0 flex-1">
+              <p className="text-xs sm:text-sm text-gray-400">Debug Mode</p>
+              <p className="text-base sm:text-lg font-bold truncate">Testing Celebration Animation</p>
+            </div>
+            <button
+              onClick={() => {
+                setView('menu');
+              }}
+              className="flex-shrink-0 px-3 sm:px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors text-sm sm:text-base touch-manipulation"
+            >
+              Back
+            </button>
+          </div>
+        </div>
+        <div className="flex-1 overflow-hidden flex items-center justify-center">
+          <CelebrationScreen
+            roundScores={mockRoundScores}
+            totalSessionScore={1520}
+            maxSessionScore={2000}
+            onPlayAgain={() => setView('menu')}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (view === 'playlist' && selectedPlaylistId) {
+    return (
+      <GameSession
+        playlistId={selectedPlaylistId}
+        onExit={() => {
+          setView('menu');
+          setSelectedPlaylistId(null);
+        }}
+        totalRounds={5}
+        debugMode
+      />
+    );
+  }
+
+  if (view === 'game' && selectedGameId) {
+    const game = TEST_GAMES.find(g => g.id === selectedGameId);
+    if (!game) return null;
+
+    const GameComponent = game.component;
+    const exitGame = () => { setView('menu'); setSelectedGameId(null); };
+
+    return (
+      <DebugGameView
+        game={game}
+        GameComponent={GameComponent}
+        slotPuzzleIds={slotPuzzleIds}
+        pivotPuzzleIds={pivotPuzzleIds}
+        onExit={exitGame}
+      />
+    );
+  }
+
+  const getDifficultyColor = (difficulty: string) => {
+    switch (difficulty?.toLowerCase()) {
+      case 'easy': return 'text-green-400 border-green-400';
+      case 'medium': return 'text-yellow-400 border-yellow-400';
+      case 'hard': return 'text-red-400 border-red-400';
+      default: return 'text-cyan-400 border-cyan-400';
+    }
+  };
+
+  return (
+    <div className="h-screen w-screen bg-black overflow-y-auto">
+      <div className="min-h-full p-4 sm:p-6 pb-8">
+        <div className="max-w-6xl mx-auto">
+          <div className="flex justify-between items-center mb-6">
+            <h1 className="text-3xl sm:text-4xl font-bold text-yellow-400" style={{ textShadow: '0 0 20px rgba(251, 191, 36, 0.5)' }}>
+              Debug Mode
+            </h1>
+            <button
+              onClick={onExit}
+              className="px-4 py-2 bg-transparent border-2 border-red-500 text-red-400 hover:bg-red-500 hover:text-black font-semibold rounded-lg transition-all text-sm sm:text-base touch-manipulation"
+              style={{ textShadow: '0 0 8px rgba(239, 68, 68, 0.4)' }}
+            >
+              Exit
+            </button>
+          </div>
+
+          <div className="mb-8">
+            <h2 className="text-2xl font-bold text-green-400 mb-4" style={{ textShadow: '0 0 15px rgba(34, 197, 94, 0.4)' }}>
+              Test Animations
+            </h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 mb-8">
+              <button
+                onClick={() => setView('celebration')}
+                className="bg-gradient-to-br from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white font-bold py-6 px-4 rounded-xl shadow-lg transition-all active:scale-95 border-2 border-green-400/50 touch-manipulation"
+              >
+                <div className="text-2xl mb-2">✨</div>
+                <div>Test Celebration Animation</div>
+              </button>
+            </div>
+          </div>
+
+          <div className="mb-8">
+            <h2 className="text-2xl font-bold text-cyan-400 mb-4" style={{ textShadow: '0 0 15px rgba(0, 255, 255, 0.4)' }}>
+              Test Playlists
+            </h2>
+            <div className="mb-4">
+              <p className="text-cyan-300 text-xs uppercase font-semibold tracking-widest mb-2">Pinned</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+                <button
+                  onClick={() => {
+                    setSelectedPlaylistId(54);
+                    setView('playlist');
+                  }}
+                  className="bg-black border-2 border-yellow-400/70 hover:border-yellow-400 rounded-lg p-4 text-left transition-all active:scale-95 touch-manipulation"
+                  style={{ boxShadow: '0 0 10px rgba(251, 191, 36, 0.3)' }}
+                >
+                  <div className="flex items-start justify-between mb-2">
+                    <h3 className="text-lg font-bold text-yellow-400 flex-1" style={{ textShadow: '0 0 10px rgba(251, 191, 36, 0.5)' }}>
+                      Silver Screen
+                    </h3>
+                    <span className="text-xs px-2 py-1 border border-yellow-400 text-yellow-400 rounded uppercase font-semibold">
+                      ID 54
+                    </span>
+                  </div>
+                  <p className="text-yellow-300/70 text-sm">Pinned for testing</p>
+                </button>
+              </div>
+            </div>
+            {loading ? (
+              <div className="text-center py-8">
+                <div className="animate-spin rounded-full h-12 w-12 border-t-4 border-cyan-400 mx-auto"></div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+                {playlists.map((playlist) => (
+                  <button
+                    key={playlist.id}
+                    onClick={() => {
+                      setSelectedPlaylistId(playlist.id);
+                      setView('playlist');
+                    }}
+                    className="bg-black border-2 border-cyan-400/50 hover:border-cyan-400 rounded-lg p-4 text-left transition-all active:scale-95 touch-manipulation"
+                    style={{ boxShadow: '0 0 10px rgba(0, 255, 255, 0.2)' }}
+                  >
+                    <div className="flex items-start justify-between mb-2">
+                      <h3 className="text-lg font-bold text-cyan-400 flex-1" style={{ textShadow: '0 0 10px rgba(0, 255, 255, 0.4)' }}>
+                        {playlist.name}
+                      </h3>
+                      <span className={`text-xs px-2 py-1 border rounded uppercase font-semibold ${getDifficultyColor(playlist.difficulty)}`}>
+                        {playlist.difficulty}
+                      </span>
+                    </div>
+                    <p className="text-cyan-300 text-sm">
+                      {playlist.description}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <h2 className="text-2xl font-bold text-pink-400 mb-4" style={{ textShadow: '0 0 15px rgba(236, 72, 153, 0.4)' }}>
+              Test Individual Games
+            </h2>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
+              {TEST_GAMES.map((game) => (
+                <button
+                  key={game.id}
+                  onClick={() => {
+                    setSelectedGameId(game.id);
+                    setView('game');
+                  }}
+                  className="bg-gradient-to-br from-pink-600 to-purple-600 hover:from-pink-500 hover:to-purple-500 text-white font-bold py-5 sm:py-6 px-3 sm:px-4 rounded-xl shadow-lg transition-all active:scale-95 border-2 border-pink-400/50 touch-manipulation"
+                >
+                  <div className="text-2xl sm:text-3xl mb-2">
+                    {GAME_ICONS_LOOKUP[game.id] ? (
+                      <div className="w-8 h-8 mx-auto text-pink-300">
+                        {GAME_ICONS_LOOKUP[game.id]}
+                      </div>
+                    ) : '⚙️'}
+                  </div>
+                  <div className="text-xs sm:text-sm">{game.name}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-8">
+            <h2 className="text-2xl font-bold text-cyan-400 mb-4" style={{ textShadow: '0 0 15px rgba(0, 255, 255, 0.4)' }}>
+              Icon Reference
+            </h2>
+            <div className="bg-black border-2 border-cyan-400/30 rounded-lg p-6">
+              <p className="text-cyan-300 text-sm mb-4">Current icon assignments for celebration screen:</p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+                {Object.entries(GAME_ICONS_LOOKUP).map(([gameId, icon]) => (
+                  <div key={gameId} className="flex flex-col items-center gap-2 p-3 bg-black border border-cyan-400/20 rounded-lg hover:border-cyan-400/50 transition-colors">
+                    <div className="w-10 h-10 text-cyan-400" style={{ filter: 'drop-shadow(0 0 8px #00ffff)' }}>
+                      {icon}
+                    </div>
+                    <div className="text-center">
+                      <p className="text-xs text-cyan-300 font-mono break-words">{gameId}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-8">
+            <Leaderboard />
+          </div>
+
+          <div className="mt-6 p-4 bg-yellow-500/20 border-2 border-yellow-500/30 rounded-lg">
+            <p className="text-sm text-yellow-200">
+              Note: Debug mode bypasses normal flow and does not save scores.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
